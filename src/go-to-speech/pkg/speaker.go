@@ -5,7 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"log"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"strconv"
@@ -16,6 +16,10 @@ import (
 
 var ShutUp bool
 var SkipImports bool
+var TargetFunction string
+var SayOut string
+
+var speechBuffer strings.Builder
 
 func SpeakGoFile(filename string) {
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
@@ -31,17 +35,23 @@ func SpeakGoFile(filename string) {
 		panic(err)
 	}
 
-	speak("package " + f.Name.String())
+	if TargetFunction == "" {
+		speak("package " + f.Name.String())
+	}
 
-	if !SkipImports {
+	if TargetFunction == "" && !SkipImports {
 		speakImportSpecs(f.Imports)
 	}
 
-	speak("declarations")
-	for _, d := range f.Decls {
-		speakDecl(d)
+	if TargetFunction == "" {
+		speak("declarations")
 	}
 
+	for _, d := range f.Decls {
+		speakDeclaration(d)
+	}
+
+	speakBuffer()
 }
 
 func speakableFilename(filename string) string {
@@ -55,15 +65,16 @@ var symbolTranslations = map[string]string{
 	"os":      "oh ess",
 	"github":  "git hub",
 	"fmt":     "fumt",
-	"printf":  "printf f",
-	"sprintf": "s printf f",
-	"fprintf": "f printf f",
+	"printf":  "print f",
+	"sprintf": "s print f",
+	"fprintf": "f print f",
 	".":       "dot",
 	",":       "comma",
 	"/":       "slash",
+	"\\":      "backslash",
 	"utf":     "you tee f",
 	"ast":     "a s t",
-	"strconv": "s t r conv",
+	"strconv": "stir conv",
 	"_":       "none",
 }
 
@@ -103,6 +114,26 @@ func speakSymbol(symbol string) {
 	speak(symbolToSpeech(symbol))
 }
 
+func speakString(s string) {
+	if strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"") {
+		s = s[1 : len(s)-1]
+		s = strings.Replace(s, "\\", " backslash ", -1)
+		if len(s) == 0 {
+			speak("empty string")
+		} else if len(strings.TrimSpace(s)) == 0 {
+			if len(s) == 1 {
+				speak("string with one blank")
+			} else {
+				speak(fmt.Sprintf("string of %d blanks", len(s)))
+			}
+		} else {
+			speak(s)
+		}
+	} else {
+		speak(s)
+	}
+}
+
 func translateSymbols(symbols []string) []string {
 	newSyms := []string{}
 	for _, sym := range symbols {
@@ -119,14 +150,32 @@ func speak(speech string) {
 	if ShutUp {
 		return
 	}
-	log.Printf("Saying: %s\n", speech)
-	cmd := exec.Command("/usr/bin/say", speech)
+	fmt.Printf("Saying: %s\n", speech)
+	speechBuffer.WriteString(speech)
+	speechBuffer.WriteString(",\n")
+}
 
-	err := cmd.Run()
+func speakBuffer() {
+	tempFile, err := ioutil.TempFile(".", "gospeech")
+	if err != nil {
+		fmt.Printf("Unable to create temp file: %+v\n", err)
+		return
+	}
+	tempFile.WriteString(speechBuffer.String())
+	tempFile.Close()
+	var cmd *exec.Cmd
+	if SayOut == "" {
+		cmd = exec.Command("/usr/bin/say", "-f", tempFile.Name())
+	} else {
+		cmd = exec.Command("/usr/bin/say", "-f", tempFile.Name(), "-o", SayOut)
+	}
+
+	err = cmd.Run()
 	if err != nil {
 		fmt.Printf("Unable to run say: %+v\n", err)
 		return
 	}
+	_ = os.Remove(tempFile.Name())
 }
 
 func speakImportSpecs(imports []*ast.ImportSpec) {
@@ -164,16 +213,21 @@ func speakTypeSpec(ts *ast.TypeSpec) {
 	speakExpr(ts.Type)
 }
 
-func speakDecl(decl ast.Decl) {
-	switch v := decl.(type) {
+func speakDeclaration(d ast.Decl) {
+	switch v := d.(type) {
 	case *ast.FuncDecl:
-		fmt.Printf("function decl:\n%+v\n", v)
+		if TargetFunction != "" && TargetFunction != v.Name.String() {
+			return
+		}
 		speak("function " + symbolToSpeech(v.Name.String()))
 		fmt.Printf("function name: %s\n", v.Name.String())
 		speakFieldList(v.Type.Params, "taking ", "parameter")
 		speakFieldList(v.Type.Results, "and returning ", "value")
 		speakBlockStmt(v.Body, "function body", "end function "+symbolToSpeech(v.Name.String()))
 	case *ast.GenDecl:
+		if TargetFunction != "" {
+			return
+		}
 		switch v.Tok {
 		case token.CONST:
 			for _, c := range v.Specs {
@@ -222,9 +276,16 @@ func speakField(field *ast.Field) {
 	}
 	speak(as)
 	speakExpr(field.Type)
+	if field.Tag != nil {
+		speak("with tag")
+		speakExpr(field.Tag)
+	}
 }
 
 func speakExpr(expr ast.Expr) {
+	if expr == nil {
+		return
+	}
 	switch v := expr.(type) {
 	case *ast.Ident:
 		speak(symbolToSpeech(v.String()))
@@ -265,8 +326,87 @@ func speakExpr(expr ast.Expr) {
 		}
 		speakExpr(v.X)
 	case *ast.BasicLit:
-		speak(v.Value)
+		speakString(v.Value)
+	case *ast.SliceExpr:
+		speak("slice")
+		speakExpr(v.X)
+		speak("from")
+		if v.Low != nil {
+			speakExpr(v.Low)
+		} else {
+			speak("start")
+		}
+		speak("to")
+		if v.High != nil {
+			speakExpr(v.High)
+		} else {
+			speak("end")
+		}
+		if v.Slice3 {
+			speak("with cap ")
+			speakExpr(v.Max)
+		}
+	case *ast.CompositeLit:
+		speakCompositeLit(v)
+
+	case *ast.KeyValueExpr:
+		speakExpr(v.Key)
+		speak("colon	")
+		speakExpr(v.Value)
+
+	case *ast.FuncLit:
+		speak("lambda")
+		speakFieldList(v.Type.Params, "taking", "parameter")
+		speakFieldList(v.Type.Results, "and returning", "value")
+		speakBlockStmt(v.Body, "is", "end lambda")
+
+	case *ast.IndexExpr:
+		speakExpr(v.X)
+		speak("sub")
+		speakExpr(v.Index)
+
+	case *ast.InterfaceType:
+		speakInterfaceType(v)
+
+	case *ast.StructType:
+		speakStructType(v)
+
+	case *ast.TypeAssertExpr:
+		speakExpr(v.X)
+		speak("as type")
+		speakExpr(v.Type)
 	}
+}
+
+func speakCompositeLit(c *ast.CompositeLit) {
+	if len(c.Elts) == 0 {
+		speak("empty")
+	}
+	if c.Type != nil {
+		speakExpr(c.Type)
+	}
+	if len(c.Elts) > 0 {
+		speak("containing")
+	}
+	first := true
+	for _, e := range c.Elts {
+		if !first {
+			speak("comma")
+		} else {
+			first = false
+		}
+		speakExpr(e)
+	}
+}
+
+func speakInterfaceType(iface *ast.InterfaceType) {
+	speak("interface")
+	speakFieldList(iface.Methods, "having", "method")
+}
+
+func speakStructType(s *ast.StructType) {
+	speak("struct")
+	speakFieldList(s.Fields, "having", "field")
 }
 
 func speakFunctionCall(c *ast.CallExpr) {
@@ -402,6 +542,57 @@ func speakStmt(stmt ast.Stmt) {
 
 	case *ast.ExprStmt:
 		speakExpr(v.X)
+
+	case *ast.BranchStmt:
+		speak(v.Tok.String())
+		if v.Label != nil {
+			speak("at")
+			speakSymbol(v.Label.String())
+		}
+	case *ast.SwitchStmt:
+		speakSwitchStatement(v)
+
+	case *ast.TypeSwitchStmt:
+		speakTypeSwitchStatement(v)
+
+	case *ast.CommClause:
+		speakCommClause(v)
+
+	case *ast.CaseClause:
+		speakSwitchCase(v)
+
+	case *ast.DeferStmt:
+		speak("defer")
+		speakExpr(v.Call)
+
+	case *ast.GoStmt:
+		speak("go")
+		speakExpr(v.Call)
+
+	case *ast.EmptyStmt:
+		speak("empty")
+
+	case *ast.IncDecStmt:
+		if v.Tok == token.INC {
+			speak("increment")
+		} else {
+			speak("decrement")
+		}
+		speakExpr(v.X)
+
+	case *ast.LabeledStmt:
+		speak("label")
+		speakSymbol(v.Label.String())
+		speakStmt(v.Stmt)
+
+	case *ast.SelectStmt:
+		speakSelectStatement(v)
+
+	case *ast.SendStmt:
+		speak("send")
+		speakExpr(v.Value)
+		speak("to channel")
+		speakExpr(v.Chan)
 	}
 }
 
@@ -456,5 +647,92 @@ func speakIfStatement(s *ast.IfStmt) {
 	}
 }
 func speakForLoop(fl *ast.ForStmt) {
+	loopType := "for"
+	if fl.Init == nil && fl.Post == nil {
+		if fl.Cond == nil {
+			speak("for ever")
+		} else {
+			speak("while")
+			loopType = "while"
+			speakExpr(fl.Cond)
+		}
+	} else {
+		speak("for")
+		if fl.Init == nil {
+			speakStmt(fl.Init)
+		}
+		if fl.Cond != nil {
+			speak("while")
+			speakExpr(fl.Cond)
+		}
+		if fl.Post != nil {
+			speakStmt(fl.Post)
+		}
+	}
+	speakBlockStmt(fl.Body, "do", "end "+loopType+" loop")
+}
+
+func speakSwitchStatement(s *ast.SwitchStmt) {
+	speak("switch")
+	if s.Init != nil {
+		speak("with initializer")
+		speakStmt(s.Init)
+	}
+	speak("on")
+	speakExpr(s.Tag)
+	speakBlockStmt(s.Body, "", "end switch")
+
+}
+
+func speakTypeSwitchStatement(s *ast.TypeSwitchStmt) {
+	speak("switch")
+	if s.Init != nil {
+		speak("with initializer")
+		speakStmt(s.Init)
+	}
+
+	speak("on type")
+	speakStmt(s.Assign)
+	speakBlockStmt(s.Body, "", "end type switch")
+
+}
+
+func speakCommClause(c *ast.CommClause) {
+	if c.Comm != nil {
+		speak("default")
+	} else {
+		speak("case")
+	}
+	speakStmt(c.Comm)
+	for _, cs := range c.Body {
+		speakStmt(cs)
+	}
+	speak("end case")
+}
+
+func speakSwitchCase(c *ast.CaseClause) {
+	if len(c.List) == 0 {
+		speak("default")
+	} else {
+		speak("case")
+	}
+	first := true
+	for _, e := range c.List {
+		if !first {
+			speak("or")
+		} else {
+			first = false
+		}
+		speakExpr(e)
+	}
+	for _, cs := range c.Body {
+		speakStmt(cs)
+	}
+	speak("end case")
+}
+
+func speakSelectStatement(s *ast.SelectStmt) {
+	speak("select")
+	speakBlockStmt(s.Body, "", "end select")
 
 }
