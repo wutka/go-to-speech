@@ -73,7 +73,7 @@ var symbolTranslations = map[string]string{
 	"/":       "slash",
 	"\\":      "backslash",
 	"utf":     "you tee f",
-	"ast":     "a s t",
+	"ast":     "eigh s t",
 	"strconv": "stir conv",
 	"_":       "none",
 }
@@ -152,7 +152,7 @@ func speak(speech string) {
 	}
 	fmt.Printf("Saying: %s\n", speech)
 	speechBuffer.WriteString(speech)
-	speechBuffer.WriteString(",\n")
+	speechBuffer.WriteString("[[slnc 200]]\n")
 }
 
 func speakBuffer() {
