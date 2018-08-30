@@ -6,15 +6,13 @@ import (
 )
 
 func main() {
-	var foo [10]int
 	quietFlag := flag.Bool("q", false, "Don't output speech")
+	skipImportsFlag := flag.Bool("noimports", false, "Don't read imports")
 
-	if foo[0] > 0 {
-
-	}
 	flag.Parse()
 
 	pkg.ShutUp = *quietFlag
+	pkg.SkipImports = *skipImportsFlag
 
 	for _, filename := range flag.Args() {
 		pkg.SpeakGoFile(filename)
