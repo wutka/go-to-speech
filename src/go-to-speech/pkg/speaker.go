@@ -707,7 +707,6 @@ func speakCommClause(c *ast.CommClause) {
 	for _, cs := range c.Body {
 		speakStmt(cs)
 	}
-	speak("end case")
 }
 
 func speakSwitchCase(c *ast.CaseClause) {
@@ -728,7 +727,6 @@ func speakSwitchCase(c *ast.CaseClause) {
 	for _, cs := range c.Body {
 		speakStmt(cs)
 	}
-	speak("end case")
 }
 
 func speakSelectStatement(s *ast.SelectStmt) {
